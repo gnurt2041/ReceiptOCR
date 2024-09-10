@@ -9,6 +9,6 @@ Pillow==9.4.0
 pyvi==0.1.1
 scikit_image==0.24.0
 scikit_learn==1.5.1
-torch==2.3.1+cu121
-torchvision==0.18.1+cu121
+torch==2.3.1
+torchvision==0.18.1
 vietocr==0.3.5
