@@ -1,4 +1,4 @@
-
+import re
 import os
 import joblib
 import pickle
@@ -8,7 +8,8 @@ import argparse
 import numpy as np
 from PIL import Image
 
-from segmentation import load_model, extract_base, extract
+from sklearn.preprocessing import OneHotEncoder
+from segmentation import load_model, extract_base
 from alignment import AngleClassificationCNN, transform
 from detection import crop_and_transform
 from paddleocr import PaddleOCR
@@ -31,25 +32,26 @@ if __name__ == '__main__':
 
     # Segmentation module
     # CHECKPOINT_MODEL_PATH = r"./weights/model_mbv3_iou_mix_2C049.pth"
-    CHECKPOINT_MODEL_PATH = "./weights/model_r50_iou_mix_2C020.pth"
-    trained_model = load_model(num_classes=2, model_name="r50", checkpoint_path=CHECKPOINT_MODEL_PATH, device=device)
+    CHECKPOINT_MODEL_PATH = "weights/deeplabv3P.pth"
+    trained_model = load_model(num_classes=2, model_name="deeplabv3P", checkpoint_path=CHECKPOINT_MODEL_PATH, device=device)
 
     # Alignment module
     model_angle = AngleClassificationCNN().to(device)
-    model_angle.load_state_dict(torch.load('./weights/best_angle_classification_cnn.pt'))
+    model_angle.load_state_dict(torch.load('./weights/best_angle_classification_cnn_v2.pt'))
     
     # Detection module
-    ocr = PaddleOCR(lang="en",show_log=False)
+    ocr = PaddleOCR(lang="en",show_log=False,use_angle_cls=True)
 
     # Recognition module
     config = Cfg.load_config_from_file('config_vietocr.yml')
     detector = Predictor(config)
 
     # Classification module
-    vectorizer = joblib.load('./weights/vectorizer.pkl')
-    f = open('./weights/naive_bayes.pickle', 'rb')
-    model_NB = pickle.load(f)
-    f.close()
+    ohe = joblib.load('./weights/ohe.pkl')
+    vectorizer = joblib.load('./weights/tfidf.pkl')
+    model_svm = joblib.load('./weights/svm.pkl')
+    # regex pattern 
+    timestamp_pattern = r'\b(?:Ngày\s*[:]*\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*(?:\d{1,2}[:]\d{2}(?::\d{2})?)?|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*\d{1,2}[:]\d{2}(?::\d{2})?|\d{1,2}\s*\d{1,2}[:]\d{2}(?::\d{2})?\s*[-]\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*[-]\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b'
 
     args = get_args()
     img_path = args.image_path
@@ -73,7 +75,7 @@ if __name__ == '__main__':
         with torch.no_grad():
             predicted, feature_maps = model_angle(sample_inputs)
         _, predict = torch.max(predicted, 1)
-        label_name = np.array([0, 90, 270])
+        label_name = np.array([0, 90, 180, 270])
         degree = label_name[predict.item()]
 
         if degree !=0:
@@ -88,10 +90,16 @@ if __name__ == '__main__':
             score = line[1][1]
             img_bbox = Image.fromarray(crop_and_transform(image,bbox))
             s = detector.predict(img_bbox, return_prob=False)
-            vec_text = ViTokenizer.tokenize(s)
-            vec_text = vectorizer.transform([vec_text])
-            class_text = model_NB.predict(vec_text)[0]
-            print(f'{s}: {class_text}')
+            if re.search(timestamp_pattern, s, re.IGNORECASE):
+                print(f"{s}: TIMESTAMP")
+            else:
+                # vec_text = ViTokenizer.tokenize([s])]
+                vec_text = vectorizer.transform([s])
+                id_text = ohe.transform([['mcocr_public_145013ddcph.jpg']])
+                s_bonus = np.hstack([vec_text.toarray(), id_text.toarray()])
+                class_text = model_svm.predict(s_bonus)[0]
+                if class_text != 'OTHER':
+                  print(f'{s}: {class_text}')
     else:
         # Directory image path
         for filename in os.listdir(img_path):
@@ -110,7 +118,7 @@ if __name__ == '__main__':
                 with torch.no_grad():
                     predicted, feature_maps = model_angle(sample_inputs)
                 _, predict = torch.max(predicted, 1)
-                label_name = np.array([0, 90, 270])
+                label_name = np.array([0, 90, 180, 270])
                 degree = label_name[predict.item()]
 
                 if degree !=0:
@@ -125,8 +133,14 @@ if __name__ == '__main__':
                     score = line[1][1]
                     img_bbox = Image.fromarray(crop_and_transform(image,bbox))
                     s = detector.predict(img_bbox, return_prob=False)
-                    vec_text = ViTokenizer.tokenize(s)
-                    vec_text = vectorizer.transform([vec_text])
-                    class_text = model_NB.predict(vec_text)[0]
-                    print(f'{s}: {class_text}')
+                    if re.search(timestamp_pattern, s, re.IGNORECASE):
+                        print(f"{s}: TIMESTAMP")
+                    else:
+                        # vec_text = ViTokenizer.tokenize([s])]
+                        vec_text = vectorizer.transform([s])
+                        id_text = ohe.transform([['mcocr_public_145013ddcph.jpg']])
+                        s_bonus = np.hstack([vec_text.toarray(), id_text.toarray()])
+                        class_text = model_svm.predict(s_bonus)[0]
+                        if class_text != 'OTHER':
+                          print(f'{s}: {class_text}')
     
